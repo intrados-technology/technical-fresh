@@ -1,0 +1,570 @@
+/* ============================================================
+   INTRADOS DESIGN STUDIO – Candidate Assessment Portal
+   script.js – Complete Application Logic
+   ============================================================ */
+
+'use strict';
+
+// ── Google Sheets integration endpoint (replace with your URL) ──
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxwwskAPDFEYWuNENc9DplBoF-b30Q2c7xqUVfyhnPvJEKosYbasi8PwdhgvL5kxPjXnw/exec";
+const ASSESSMENT_TYPE =
+  document.querySelector('meta[name="assessment-type"]')?.content || 'Technical';
+
+// ── General Assessment sheet (source for Reference ID lookup) ────
+// Candidate details (Name, Mobile, Email, Position) are pulled live
+// from the "General Assessment" tab using the Reference ID the
+// candidate enters here — no need to re-type their details.
+// Columns in that tab: B = Reference ID, C = Name, D = Mobile,
+// E = Email, F = Position.
+const GENERAL_SHEET_ID  = "1Ep0ESBJb-QxzBfN2oxIAH0RFJOPvCsNb4NpvmyWOfDA";
+const GENERAL_SHEET_TAB = "General Assessment";
+
+// ── Multi-Tab Protection ────────────────────────────────────────
+// Each tab gets a unique ID. When an assessment starts, that ID is
+// stored in localStorage('assessmentTab'). Any other tab that loads
+// and finds a DIFFERENT tab ID already stored is blocked immediately.
+const TAB_ID = Date.now().toString();
+
+(function enforceTabOwnership() {
+  const runningTab = localStorage.getItem('assessmentTab');
+  if (
+    localStorage.getItem('assessmentRunning') === 'true' &&
+    runningTab &&
+    runningTab !== TAB_ID
+  ) {
+    // Another tab owns this session — block this tab completely
+    document.body.innerHTML = `
+      <div style="
+        display:flex;
+        flex-direction:column;
+        align-items:center;
+        justify-content:center;
+        min-height:100vh;
+        font-family:Arial,sans-serif;
+        background:#f8f5ff;
+        text-align:center;
+        padding:40px 20px;
+      ">
+        <div style="
+          background:#fff;
+          border:1.5px solid #ddd6fe;
+          border-radius:20px;
+          padding:48px 40px;
+          max-width:440px;
+          box-shadow:0 8px 32px rgba(108,63,197,0.12);
+        ">
+          <div style="font-size:48px;margin-bottom:16px;">🔒</div>
+          <h2 style="color:#4E2E9A;margin:0 0 12px;font-size:22px;">
+            Assessment Already Running
+          </h2>
+          <p style="color:#4B5563;line-height:1.6;margin:0 0 20px;">
+            An active assessment session was detected in another tab.<br/>
+            Please return to the original tab to continue.
+          </p>
+          <p style="color:#9CA3AF;font-size:12px;margin:0;">
+            If you believe this is an error, close all tabs and reload.
+          </p>
+        </div>
+      </div>`;
+    throw new Error('IDS: Assessment already running in another tab. Tab blocked.');
+  }
+})();
+
+// ── App State ───────────────────────────────────────────────────
+const state = {
+  candidate: {},       // Registration data
+  answers:   {},       // { questionIndex: selectedOptionIndex }
+  currentQ:  0,        // 0-based current question index
+  timerSecs: 30 * 60, // 30 minutes in seconds
+  timerRef:  null,     // setInterval reference
+  submitted: false     // Guard against double-submission
+};
+
+// ── Restore saved answers on page load ──────────────────────────
+try {
+  const savedAnswers = localStorage.getItem('ids_answers');
+  if (savedAnswers) {
+    state.answers = JSON.parse(savedAnswers);
+  }
+} catch(e) {
+  console.warn('Unable to restore saved answers');
+}
+
+// ── DOM References ──────────────────────────────────────────────
+const DOM = {
+  regSection:     document.getElementById('registration-section'),
+  assSection:     document.getElementById('assessment-section'),
+  confSection:    document.getElementById('confirmation-section'),
+  timerDisplay:   document.getElementById('timer-display'),
+  timerText:      document.getElementById('timer-text'),
+
+  formRefId:      document.getElementById('field-refid'),
+  errRefId:       document.getElementById('err-refid'),
+  btnVerify:      document.getElementById('btn-verify'),
+  btnStart:       document.getElementById('btn-start'),
+  candSummary:    document.getElementById('candidate-summary'),
+  summaryName:    document.getElementById('summary-name'),
+  summaryMobile:  document.getElementById('summary-mobile'),
+  summaryEmail:   document.getElementById('summary-email'),
+  summaryPosition:document.getElementById('summary-position'),
+
+  progressFill:   document.getElementById('progress-fill'),
+  progressLabel:  document.getElementById('progress-label'),
+  progressCount:  document.getElementById('progress-count'),
+  sectionStrip:   document.getElementById('section-strip'),
+  questionWrap:   document.getElementById('question-wrap'),
+  btnPrev:        document.getElementById('btn-prev'),
+  btnNext:        document.getElementById('btn-next'),
+  btnSubmit:      document.getElementById('btn-submit'),
+  unansweredHint: document.getElementById('unanswered-hint'),
+
+  modal:          document.getElementById('submit-modal'),
+  modalMsg:       document.getElementById('modal-unanswered-count'),
+  btnModalCancel: document.getElementById('btn-modal-cancel'),
+  btnModalConfirm:document.getElementById('btn-modal-confirm'),
+
+  refId:          document.getElementById('ref-id')
+};
+
+// ── Security ─────────────────────────────────────────────────────
+document.addEventListener('contextmenu', e => e.preventDefault());
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'F12') { e.preventDefault(); return false; }
+  if (e.ctrlKey && e.shiftKey && ['I','i','J','j','C','c'].includes(e.key)) { e.preventDefault(); return false; }
+  if (e.ctrlKey && ['U','u','S','s'].includes(e.key)) { e.preventDefault(); return false; }
+});
+// ── Stale lock cleanup on tab close / crash ─────────────────────
+// 'unload' fires even on crashes (best-effort). Clears the tab lock
+// so a future session isn't blocked by a ghost lock.
+window.addEventListener('unload', function() {
+  if (!state.submitted) {
+    localStorage.removeItem('assessmentRunning');
+    localStorage.removeItem('assessmentTab');
+  }
+});
+
+window.addEventListener('beforeunload', function(e) {
+  if (!state.submitted && DOM.assSection.style.display === 'block') {
+    e.preventDefault();
+    e.returnValue = 'Your assessment is in progress. Are you sure you want to leave?';
+    return e.returnValue;
+  }
+});
+
+// ── Reference ID Verification & Auto-Fill ─────────────────────────
+// Candidate types their Reference ID from the General Assessment,
+// clicks Verify, and their Name/Mobile/Email/Position are pulled
+// live from the "General Assessment" sheet tab (columns B–F) using
+// the public gviz/tq feed — same pattern used for Ref ID generation
+// on the General Assessment portal. Loaded via a JSONP <script> tag
+// since the gviz endpoint does not send CORS headers for fetch().
+
+function setRefIdError(msg) {
+  DOM.formRefId.classList.toggle('error', !!msg);
+  DOM.formRefId.classList.remove('success');
+  DOM.errRefId.textContent = msg || '';
+  DOM.errRefId.classList.toggle('show', !!msg);
+}
+
+function clearVerifiedCandidate() {
+  state.candidate = {};
+  DOM.candSummary.style.display = 'none';
+  DOM.btnStart.disabled = true;
+  DOM.formRefId.classList.remove('success');
+}
+
+// Re-verification required any time the Reference ID is edited
+DOM.formRefId.addEventListener('input', clearVerifiedCandidate);
+
+function verifyReferenceId() {
+  const refId = DOM.formRefId.value.trim();
+  setRefIdError('');
+  clearVerifiedCandidate();
+
+  if (!refId) {
+    setRefIdError('Please enter your Reference ID.');
+    return;
+  }
+
+  DOM.btnVerify.disabled = true;
+  DOM.btnVerify.textContent = 'Verifying…';
+
+  const callbackName = 'idsGvizCallback_' + Date.now();
+  let settled = false;
+
+  const cleanup = function() {
+    delete window[callbackName];
+    const tag = document.getElementById(callbackName);
+    if (tag) tag.remove();
+    clearTimeout(timeoutRef);
+    DOM.btnVerify.disabled = false;
+    DOM.btnVerify.textContent = 'Verify';
+  };
+
+  const timeoutRef = setTimeout(function() {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    setRefIdError('Could not reach the verification service. Check your connection and try again.');
+  }, 12000);
+
+  window[callbackName] = function(response) {
+    if (settled) return;
+    settled = true;
+    cleanup();
+
+    try {
+      const rows = response.table.rows;
+      if (!rows || rows.length === 0) {
+        setRefIdError('Reference ID not found. Please check and try again.');
+        return;
+      }
+
+      const cells = rows[0].c;
+      const name     = cells[1] && cells[1].v ? String(cells[1].v).trim() : '';
+      const mobile   = cells[2] && cells[2].v ? String(cells[2].v).trim() : '';
+      const email    = cells[3] && cells[3].v ? String(cells[3].v).trim() : '';
+      const position = cells[4] && cells[4].v ? String(cells[4].v).trim() : '';
+
+      if (!name) {
+        setRefIdError('Reference ID not found. Please check and try again.');
+        return;
+      }
+
+      state.candidate = { name, mobile, email, position, refId };
+
+      DOM.summaryName.textContent     = name;
+      DOM.summaryMobile.textContent   = mobile || '—';
+      DOM.summaryEmail.textContent    = email || '—';
+      DOM.summaryPosition.textContent = position || '—';
+      DOM.candSummary.style.display   = 'block';
+      DOM.formRefId.classList.add('success');
+      DOM.btnStart.disabled = false;
+    } catch (err) {
+      setRefIdError('Something went wrong while verifying. Please try again.');
+    }
+  };
+
+  const query = "select B,C,D,E,F where B = '" + refId.replace(/'/g, "\\'") + "'";
+  const url =
+    'https://docs.google.com/spreadsheets/d/' + GENERAL_SHEET_ID + '/gviz/tq' +
+    '?sheet=' + encodeURIComponent(GENERAL_SHEET_TAB) +
+    '&tq=' + encodeURIComponent(query) +
+    '&tqx=responseHandler:' + callbackName;
+
+  const script = document.createElement('script');
+  script.id = callbackName;
+  script.src = url;
+  script.onerror = function() {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    setRefIdError('Could not verify right now. Please try again in a moment.');
+  };
+  document.body.appendChild(script);
+}
+
+DOM.btnVerify.addEventListener('click', verifyReferenceId);
+DOM.formRefId.addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') { e.preventDefault(); verifyReferenceId(); }
+});
+
+// ── Start Assessment ─────────────────────────────────────────────
+DOM.btnStart.addEventListener('click', function() {
+  // Candidate details were already populated by verifyReferenceId();
+  // guard here in case the button was somehow enabled without a match.
+  if (!state.candidate || !state.candidate.name) {
+    setRefIdError('Please verify your Reference ID before starting.');
+    return;
+  }
+  DOM.regSection.style.display   = 'none';
+  DOM.assSection.style.display   = 'block';
+  DOM.timerDisplay.style.display = 'flex';
+  // Mark this tab as the authoritative assessment session
+  localStorage.setItem('assessmentRunning', 'true');
+  localStorage.setItem('assessmentTab', TAB_ID);
+  // Resume from the last answered question if answers were restored
+  const lastAnswered = Object.keys(state.answers).length;
+  renderQuestion(lastAnswered > 0 ? lastAnswered : 0);
+  startTimer();
+});
+
+// ── Timer ─────────────────────────────────────────────────────────
+function formatTime(s) {
+  return String(Math.floor(s / 60)).padStart(2,'0') + ':' + String(s % 60).padStart(2,'0');
+}
+
+function startTimer() {
+  DOM.timerText.textContent = formatTime(state.timerSecs);
+  state.timerRef = setInterval(function() {
+    state.timerSecs--;
+    DOM.timerText.textContent = formatTime(state.timerSecs);
+    if (state.timerSecs <= 0) {
+      clearInterval(state.timerRef);
+      if (!state.submitted) finaliseSubmission();
+    } else if (state.timerSecs <= 60) {
+      DOM.timerDisplay.classList.remove('warning');
+      DOM.timerDisplay.classList.add('danger');
+    } else if (state.timerSecs <= 300) {
+      DOM.timerDisplay.classList.add('warning');
+    }
+  }, 1000);
+}
+
+// ── Answer Selection via Event Delegation ────────────────────────
+// ONE listener on the stable parent — never removed, never duplicated.
+// Reads clicks on .option-label children directly.
+DOM.questionWrap.addEventListener('click', function(e) {
+  const label = e.target.closest('.option-label');
+  if (!label) return;
+
+  const optionIndex = parseInt(label.getAttribute('data-option'), 10);
+  if (isNaN(optionIndex)) return;
+
+  // Save answer
+  state.answers[state.currentQ] = optionIndex;
+  // Persist answers to localStorage on every selection
+  localStorage.setItem('ids_answers', JSON.stringify(state.answers));
+
+  // Update visual selection — remove from all, add to clicked
+  DOM.questionWrap.querySelectorAll('.option-label').forEach(function(l) {
+    l.classList.remove('selected');
+    l.setAttribute('aria-checked', 'false');
+  });
+  label.classList.add('selected');
+  label.setAttribute('aria-checked', 'true');
+
+  // Clear the unanswered warning now that a selection exists
+  DOM.unansweredHint.classList.remove('show');
+});
+
+// ── Question Rendering ───────────────────────────────────────────
+function renderQuestion(index) {
+  state.currentQ = index;
+  const q = SHUFFLED_QUESTIONS[index];
+  const savedAnswer = state.answers[index]; // may be undefined
+
+  // Progress
+  const pct = Math.round(((index + 1) / SHUFFLED_QUESTIONS.length) * 100);
+  DOM.progressFill.style.width      = pct + '%';
+  DOM.progressLabel.textContent     = 'Question ' + (index + 1) + ' of ' + SHUFFLED_QUESTIONS.length;
+  DOM.progressCount.textContent     = pct + '% Complete';
+  DOM.sectionStrip.textContent      = 'Section ' + q.section + ': ' + q.sectionLabel;
+
+  // Build options as <button> elements — natively clickable on all
+  // browsers/devices regardless of user-select:none on the body.
+  const optionsHTML = q.options.map(function(opt, i) {
+    const isSelected = (savedAnswer === i);
+    return '<li class="option-item">' +
+      '<button class="option-label' + (isSelected ? ' selected' : '') + '" data-option="' + i + '" type="button" role="radio" aria-checked="' + isSelected + '">' +
+        '<span class="option-indicator"></span>' +
+        '<span class="option-text">' + escapeHTML(opt) + '</span>' +
+      '</button>' +
+    '</li>';
+  }).join('');
+
+  DOM.questionWrap.innerHTML =
+    '<div class="question-card">' +
+      '<div class="question-number">Q' + (index + 1) + '</div>' +
+      '<p class="question-text">' + escapeHTML(q.text) + '</p>' +
+      (q.image ? '<div class="question-image-wrap"><img src="' + escapeHTML(q.image) + '" alt="Question ' + (index + 1) + ' diagram" class="question-image" /></div>' : '') +
+      '<ul class="options-list" role="radiogroup" aria-label="Answer options">' +
+        optionsHTML +
+      '</ul>' +
+    '</div>';
+
+  // Buttons handle Enter natively; add Space for radio-group UX
+  DOM.questionWrap.querySelectorAll('.option-label').forEach(function(btn) {
+    btn.addEventListener('keydown', function(e) {
+      if (e.key === ' ') { e.preventDefault(); btn.click(); }
+    });
+  });
+
+  // Nav button states
+  DOM.btnPrev.disabled            = (index === 0);
+  const isLast                    = (index === SHUFFLED_QUESTIONS.length - 1);
+  DOM.btnNext.style.display       = isLast ? 'none'        : 'inline-flex';
+  DOM.btnSubmit.style.display     = isLast ? 'inline-flex' : 'none';
+
+  // Reset warning state on every fresh render
+  DOM.unansweredHint.classList.remove('show');
+}
+
+function escapeHTML(str) {
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Navigation ───────────────────────────────────────────────────
+DOM.btnPrev.addEventListener('click', function() {
+  if (state.currentQ > 0) renderQuestion(state.currentQ - 1);
+});
+
+DOM.btnNext.addEventListener('click', function() {
+  if (state.currentQ < SHUFFLED_QUESTIONS.length - 1) renderQuestion(state.currentQ + 1);
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ── Submit ───────────────────────────────────────────────────────
+DOM.btnSubmit.addEventListener('click', function() {
+  const unanswered = SHUFFLED_QUESTIONS.length - Object.keys(state.answers).length;
+  DOM.modalMsg.textContent = unanswered > 0
+    ? 'You have ' + unanswered + ' unanswered question' + (unanswered > 1 ? 's' : '') + '.'
+    : 'All questions answered. Ready to submit?';
+  DOM.modal.classList.add('open');
+});
+
+DOM.btnModalCancel.addEventListener('click',  () => DOM.modal.classList.remove('open'));
+DOM.btnModalConfirm.addEventListener('click', function() {
+  DOM.modal.classList.remove('open');
+  finaliseSubmission();
+});
+
+// ── Scoring ──────────────────────────────────────────────────────
+function calculateScores() {
+  var totalScore = 0;
+
+  SHUFFLED_QUESTIONS.forEach(function(q, i) {
+    var chosen = state.answers[i];
+    if (chosen === undefined) return;
+    if (chosen === q.correctIndex) {
+      totalScore += q.marks;
+    }
+  });
+
+  var rating =
+    totalScore >= 27 ? 'Exceptional'    :
+    totalScore >= 23 ? 'Strong Hire'    :
+    totalScore >= 18 ? 'Hire'           :
+    totalScore >= 14 ? 'Borderline'     : 'Not Recommended';
+
+  return { totalScore, rating, referenceId: state.candidate.refId || '' };
+}
+
+// ── Final Submission ─────────────────────────────────────────────
+function finaliseSubmission() {
+  if (state.submitted) return;
+  state.submitted = true;
+  if (state.timerRef) clearInterval(state.timerRef);
+
+  var scores  = calculateScores();
+  var subTime = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+
+  var hrRecord = {
+    referenceId:    scores.referenceId,
+    name:           state.candidate.name,
+    mobile:         state.candidate.mobile,
+    email:          state.candidate.email,
+    position:       state.candidate.position,
+    candidateRefId: state.candidate.refId,
+    totalScore:     scores.totalScore,
+    rating:         scores.rating,
+    submissionTime: subTime,
+    answers:        state.answers
+  };
+
+  try { sessionStorage.setItem('ids_hr_record', JSON.stringify(hrRecord)); } catch(e) {}
+  submitToGoogleSheet(hrRecord);
+  // Clear all localStorage session flags on completion
+  localStorage.removeItem('assessmentRunning');
+  localStorage.removeItem('assessmentTab');
+  localStorage.removeItem('ids_answers');
+
+  DOM.assSection.style.display   = 'none';
+  DOM.timerDisplay.style.display = 'none';
+  DOM.confSection.style.display  = 'block';
+  DOM.refId.textContent = scores.referenceId;
+}
+
+// ── Google Sheets ─────────────────────────────────────────────────
+async function submitToGoogleSheet(record) {
+  if (!SCRIPT_URL || SCRIPT_URL === 'PASTE_GOOGLE_APPS_SCRIPT_URL_HERE') return;
+  try {
+    await fetch(SCRIPT_URL, {
+      method: 'POST', mode: 'no-cors',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sheetName:      'Technical Assessment',
+        referenceId:    record.referenceId,
+        name:           record.name,
+        mobile:         record.mobile,
+        email:          record.email,
+        position:       record.position,
+        candidateRefId: record.candidateRefId,
+        totalScore:     record.totalScore,
+        rating:         record.rating,
+        submissionTime: record.submissionTime
+      })
+    });
+  } catch(err) { console.warn('[IDS] Sheets error:', err); }
+}
+
+// ── PDF Report (HR only) ──────────────────────────────────────────
+function generatePDFReport() {
+  var record;
+  try { record = JSON.parse(sessionStorage.getItem('ids_hr_record')); } catch(e) { record = null; }
+  if (!record) { alert('No submission data found in this session.'); return; }
+
+  var rows = SHUFFLED_QUESTIONS.map(function(q, i) {
+    var chosen  = record.answers[i];
+    var ans     = (chosen !== undefined) ? q.options[chosen] : '— Not answered —';
+    var correct = q.options[q.correctIndex];
+    var mark    = (chosen !== undefined && chosen === q.correctIndex) ? '✓' : '✗';
+    var color   = (mark === '✓') ? '#16a34a' : '#dc2626';
+    return '<tr>' +
+      '<td>' + q.id + '</td>' +
+      '<td>Section ' + q.section + '</td>' +
+      '<td>' + q.text + '</td>' +
+      '<td>' + ans + '</td>' +
+      '<td>' + correct + '</td>' +
+      '<td style="text-align:center;font-weight:bold;color:' + color + '">' + mark + '</td>' +
+    '</tr>';
+  }).join('');
+
+  var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Technical Assessment Report – ' + record.name + '</title>' +
+    '<style>body{font-family:Arial,sans-serif;font-size:12px;padding:20px}h1{color:#6C3FC5}h2{color:#4E2E9A;margin:18px 0 8px}' +
+    'table{width:100%;border-collapse:collapse;margin-bottom:16px}th{background:#6C3FC5;color:#fff;padding:7px 10px;text-align:left}' +
+    'td{padding:6px 10px;border-bottom:1px solid #ddd6fe;vertical-align:top}tr:nth-child(even) td{background:#f8f5ff}' +
+    '.conf{color:#DC2626;font-size:10px;text-align:center;border-top:1px solid #ddd;padding-top:10px;margin-top:20px}</style></head><body>' +
+    '<h1>INTRADOS DESIGN STUDIO</h1>' +
+    '<p style="color:#9ca3af;font-size:10px;text-transform:uppercase;letter-spacing:.1em">Technical Assessment Report – HR Confidential</p>' +
+    '<h2>Candidate Details</h2><table>' +
+    '<tr><th>Field</th><th>Value</th></tr>' +
+    '<tr><td>Reference ID</td><td>' + record.referenceId + '</td></tr>' +
+    '<tr><td>Name</td><td>' + record.name + '</td></tr>' +
+    '<tr><td>Mobile</td><td>' + record.mobile + '</td></tr>' +
+    '<tr><td>Email</td><td>' + record.email + '</td></tr>' +
+    '<tr><td>Position Applied</td><td>' + record.position + '</td></tr>' +
+    '<tr><td>Reference ID (Candidate)</td><td>' + (record.candidateRefId || '—') + '</td></tr>' +
+    '<tr><td>Submitted</td><td>' + record.submissionTime + '</td></tr></table>' +
+    '<h2>Result Summary</h2><table>' +
+    '<tr><th>Metric</th><th>Value</th></tr>' +
+    '<tr><td>Total Score</td><td><strong>' + record.totalScore + ' / 30</strong></td></tr>' +
+    '<tr><td>Rating</td><td><strong>' + record.rating + '</strong></td></tr></table>' +
+    '<h2>All Responses</h2><table>' +
+    '<tr><th>#</th><th>Section</th><th>Question</th><th>Candidate Answer</th><th>Correct Answer</th><th style="text-align:center">Result</th></tr>' +
+    rows + '</table>' +
+    '<p class="conf">CONFIDENTIAL – FOR HR USE ONLY</p></body></html>';
+
+  var win = window.open('', '_blank');
+  win.document.write(html);
+  win.document.close();
+  setTimeout(function() { win.print(); }, 500);
+}
+
+window.generatePDFReport = generatePDFReport;

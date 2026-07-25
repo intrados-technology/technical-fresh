@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex,nofollow" />
+  <title>Test 2: Technical Assessment – Intrados Design Studio</title>
+  <link rel="stylesheet" href="style.css" />
+  <!--
+    INTRADOS DESIGN STUDIO – Candidate Assessment Portal
+    Version : 1.0
+    Author  : Intrados Design Studio
+    Note    : All scores and recommendations are hidden from candidates.
+              To set up Google Sheets integration, replace SCRIPT_URL in script.js.
+              For HR PDF, call window.generatePDFReport() from browser console
+              immediately after submission (same session).
+  -->
+  <style>
+    .question-image-wrap { margin: 16px 0 20px; text-align: center; }
+    .question-image { max-width: 100%; height: auto; border-radius: 10px; border: 1.5px solid #ddd6fe; box-shadow: 0 2px 12px rgba(108,63,197,0.10); }
+  </style>
+</head>
+<body>
+
+<!-- ============================================================
+     SITE HEADER
+     ============================================================ -->
+<header class="site-header" role="banner">
+  <div class="header-inner">
+
+    <!-- Logo -->
+    <div class="logo-lockup" aria-label="Intrados Design Studio">
+      <img src="https://drive.google.com/thumbnail?id=15vrGO2Vyw49k9AzooJ2wT9TMJ8rXjgJm&sz=w400" alt="Intrados Design Studio" class="logo-image" />
+    </div>
+
+    <!-- Timer (shown only during assessment) -->
+    <div id="timer-display" role="timer" aria-live="polite" aria-label="Time remaining">
+      <span class="timer-icon">⏱</span>
+      <span id="timer-text">30:00</span>
+    </div>
+
+  </div>
+</header>
+
+
+<!-- ============================================================
+     MAIN CONTENT
+     ============================================================ -->
+<main class="page-wrapper" role="main">
+
+
+  <!-- ──────────────────────────────────────────────────────────
+       SECTION 1: CANDIDATE REGISTRATION
+       ────────────────────────────────────────────────────────── -->
+  <section id="registration-section" aria-label="Candidate Registration">
+
+    <div class="card">
+
+      <!-- Card Header -->
+      <div class="card-header">
+        <div class="reg-intro">
+          <div class="section-badge">
+            <span>📋</span>
+            Test 2: Technical Assessment
+          </div>
+          <h1 class="reg-title">Tell us about yourself</h1>
+          <p class="reg-sub">
+            Enter the Reference ID you received after completing the General Assessment.
+            We'll pull in the rest of your details automatically.
+          </p>
+          <div class="assessment-meta">
+            <span class="meta-pill"><span class="icon">⏱</span> 30 Minutes</span>
+            <span class="meta-pill"><span class="icon">📝</span> 30 Questions</span>
+            <span class="meta-pill"><span class="icon">🔒</span> Confidential</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Registration Form -->
+      <div class="card-body">
+        <div class="form-grid" role="form" aria-label="Candidate registration form">
+
+          <!-- Reference ID -->
+          <div class="form-group">
+            <label class="form-label" for="field-refid">
+              Reference ID <span class="req" aria-hidden="true">*</span>
+            </label>
+            <div class="refid-input-row">
+              <input
+                type="text"
+                id="field-refid"
+                class="form-input"
+                placeholder="e.g. IDS-2026-0001"
+                autocomplete="off"
+                aria-required="true"
+                aria-describedby="err-refid"
+                maxlength="50"
+              />
+              <button
+                id="btn-verify"
+                class="btn-verify"
+                type="button"
+                aria-label="Verify Reference ID"
+              >
+                Verify
+              </button>
+            </div>
+            <span class="field-error" id="err-refid" role="alert" aria-live="polite"></span>
+            <p class="refid-hint">Use the Reference ID you received after completing the General Assessment. Your details will be pulled in automatically.</p>
+          </div>
+
+          <!-- Verified Candidate Summary -->
+          <div id="candidate-summary" class="candidate-summary" style="display:none;" aria-live="polite">
+            <div class="summary-header">
+              <span class="summary-check" aria-hidden="true">✓</span>
+              <span>Candidate Verified</span>
+            </div>
+            <div class="summary-row"><span class="summary-label">Name</span><span class="summary-value" id="summary-name"></span></div>
+            <div class="summary-row"><span class="summary-label">Mobile</span><span class="summary-value" id="summary-mobile"></span></div>
+            <div class="summary-row"><span class="summary-label">Email</span><span class="summary-value" id="summary-email"></span></div>
+            <div class="summary-row"><span class="summary-label">Position</span><span class="summary-value" id="summary-position"></span></div>
+            <p class="summary-note">Not you? Double-check the Reference ID above and verify again.</p>
+          </div>
+
+          <!-- Start Button -->
+          <button
+            id="btn-start"
+            class="btn-start"
+            type="button"
+            disabled
+            aria-label="Start the assessment"
+          >
+            <span>Begin Assessment</span>
+            <span aria-hidden="true">→</span>
+          </button>
+
+        </div><!-- /.form-grid -->
+      </div><!-- /.card-body -->
+
+    </div><!-- /.card -->
+
+  </section>
+  <!-- /#registration-section -->
+
+
+  <!-- ──────────────────────────────────────────────────────────
+       SECTION 2: ASSESSMENT
+       ────────────────────────────────────────────────────────── -->
+  <section id="assessment-section" aria-label="Assessment Questions" style="display:none;">
+
+    <!-- Progress Bar -->
+    <div class="progress-wrap" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="3">
+      <div class="progress-header">
+        <span class="progress-label" id="progress-label">Question 1 of 30</span>
+        <span class="progress-count" id="progress-count">3% Complete</span>
+      </div>
+      <div class="progress-track">
+        <div class="progress-fill" id="progress-fill" style="width: 3%;"></div>
+      </div>
+    </div>
+
+    <!-- Section Strip -->
+    <div class="section-strip" aria-label="Current section" id="section-strip">
+      <span class="section-dot"></span>
+      Section A: Isometric → Orthographic
+    </div>
+
+    <!-- Question Render Target -->
+    <div id="question-wrap" aria-live="polite"></div>
+
+    <!-- Unanswered hint -->
+    <p id="unanswered-hint" class="unanswered-hint">
+      Please select an answer to continue to the next question.
+    </p>
+
+    <!-- Navigation -->
+    <div class="nav-buttons">
+      <button id="btn-prev" class="btn btn-outline" type="button" disabled aria-label="Previous question">
+        ← Previous
+      </button>
+      <button id="btn-next" class="btn btn-primary" type="button" aria-label="Next question">
+        Next →
+      </button>
+      <button id="btn-submit" class="btn btn-submit" type="button" style="display:none;" aria-label="Submit assessment">
+        Submit Assessment ✓
+      </button>
+    </div>
+
+  </section>
+  <!-- /#assessment-section -->
+
+
+  <!-- ──────────────────────────────────────────────────────────
+       SECTION 3: CONFIRMATION
+       ────────────────────────────────────────────────────────── -->
+  <section id="confirmation-section" aria-label="Submission Confirmation" style="display:none;">
+
+    <div class="card">
+      <div class="card-body">
+
+        <!-- Success Icon -->
+        <div class="confirm-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+          </svg>
+        </div>
+
+        <h2 class="confirm-title">Technical Assessment Submitted Successfully</h2>
+
+        <p class="confirm-sub">
+          Thank you for completing Test 2: Technical Assessment.<br/>
+          Our recruitment team will review your results and contact shortlisted candidates.
+        </p>
+
+        <!-- Reference ID -->
+        <div class="ref-id-block">
+          <span class="ref-label">Your Reference ID</span>
+          <span class="ref-id" id="ref-id">IDS-2026-0001</span>
+        </div>
+
+        <p class="confirm-note">
+          Please save your reference ID for future correspondence.<br/>
+          We typically review applications within 5–7 working days.
+        </p>
+
+      </div><!-- /.card-body -->
+    </div><!-- /.card -->
+
+  </section>
+  <!-- /#confirmation-section -->
+
+
+</main>
+<!-- /.page-wrapper -->
+
+
+<!-- ============================================================
+     SUBMIT CONFIRMATION MODAL
+     ============================================================ -->
+<div
+  class="modal-overlay"
+  id="submit-modal"
+  role="dialog"
+  aria-modal="true"
+  aria-labelledby="modal-title"
+  aria-describedby="modal-desc"
+>
+  <div class="modal-box">
+    <div class="modal-icon" aria-hidden="true">🎯</div>
+    <h3 class="modal-title" id="modal-title">Ready to Submit?</h3>
+    <p class="modal-body" id="modal-desc">
+      <span id="modal-unanswered-count">All questions answered.</span>
+      <br/>
+      Once submitted, you cannot return to change your answers.
+    </p>
+    <div class="modal-actions">
+      <button class="btn-modal-cancel" id="btn-modal-cancel" type="button">
+        Review Answers
+      </button>
+      <button class="btn-modal-confirm" id="btn-modal-confirm" type="button">
+        Submit Now
+      </button>
+    </div>
+  </div>
+</div>
+
+
+<!-- ============================================================
+     SCRIPTS
+     Load questions first, then main application logic.
+     ============================================================ -->
+<script src="questions.js"></script>
+<script src="script.js"></script>
+
+</body>
+</html>
