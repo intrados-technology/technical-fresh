@@ -15,9 +15,26 @@ const ASSESSMENT_TYPE =
 // from the "General Assessment" tab using the Reference ID the
 // candidate enters here — no need to re-type their details.
 // Columns in that tab: B = Reference ID, C = Name, D = Mobile,
-// E = Email, F = Position.
+// E = Email, F = Position, K = Recommendation.
+// Only candidates rated "Borderline" or above in the General
+// Assessment (Borderline / Hire / Strong Hire / Exceptional) are
+// eligible to take this Technical Assessment. "Reject" or an
+// unmatched Reference ID both surface the same message to the
+// candidate so no scoring detail is ever revealed to them.
 const GENERAL_SHEET_ID  = "1Ep0ESBJb-QxzBfN2oxIAH0RFJOPvCsNb4NpvmyWOfDA";
 const GENERAL_SHEET_TAB = "General Assessment";
+const TECHNICAL_SHEET_TAB = "Technical Assessment"; // same spreadsheet, different tab — used to block repeat attempts
+// "Rejection Overridden" is a manual status the backend/HR team can set
+// directly in the General Assessment sheet (column K) to let a
+// previously-Rejected candidate appear for the Technical Assessment anyway.
+const ELIGIBLE_RATINGS  = ["borderline", "hire", "strong hire", "exceptional", "rejection overridden"];
+const NOT_ELIGIBLE_MSG  = "You are not eligible for this test.";
+
+// This portal only accepts candidates who registered under the
+// "Fresher" track on the General Assessment. Prevents an
+// Experienced candidate from taking the (typically easier) Freshers
+// Technical Assessment to game their score, and vice versa.
+const PORTAL_TRACK      = "Fresher";
 
 // ── Multi-Tab Protection ────────────────────────────────────────
 // Each tab gets a unique ID. When an assessment starts, that ID is
@@ -123,6 +140,10 @@ const DOM = {
   btnModalCancel: document.getElementById('btn-modal-cancel'),
   btnModalConfirm:document.getElementById('btn-modal-confirm'),
 
+  neModal:        document.getElementById('not-eligible-modal'),
+  neModalDesc:    document.getElementById('not-eligible-desc'),
+  btnNeModalOk:   document.getElementById('btn-not-eligible-ok'),
+
   refId:          document.getElementById('ref-id')
 };
 
@@ -153,11 +174,19 @@ window.addEventListener('beforeunload', function(e) {
 
 // ── Reference ID Verification & Auto-Fill ─────────────────────────
 // Candidate types their Reference ID from the General Assessment,
-// clicks Verify, and their Name/Mobile/Email/Position are pulled
-// live from the "General Assessment" sheet tab (columns B–F) using
-// the public gviz/tq feed — same pattern used for Ref ID generation
-// on the General Assessment portal. Loaded via a JSONP <script> tag
-// since the gviz endpoint does not send CORS headers for fetch().
+// clicks Verify, and two checks run in sequence before they're
+// allowed to start:
+//   1. Technical Assessment tab — has this Reference ID already
+//      submitted a Technical attempt? If yes, block re-entry
+//      regardless of what rating that attempt received.
+//   2. General Assessment tab — is this Reference ID's Recommendation
+//      Borderline or above? If not (or not found at all), block.
+// Only if both checks pass do we pull Name/Mobile/Email/Position
+// (columns B–F) and populate the candidate summary.
+// Loaded via JSONP <script> tags since the gviz endpoint does not
+// send CORS headers for fetch().
+
+const ALREADY_ATTEMPTED_MSG = "You have already completed this assessment. Multiple attempts are not allowed.";
 
 function setRefIdError(msg) {
   DOM.formRefId.classList.toggle('error', !!msg);
@@ -173,23 +202,31 @@ function clearVerifiedCandidate() {
   DOM.formRefId.classList.remove('success');
 }
 
+function showNotEligibleModal(msg) {
+  DOM.neModalDesc.textContent = msg;
+  DOM.neModal.classList.add('open');
+}
+function hideNotEligibleModal() {
+  DOM.neModal.classList.remove('open');
+}
+DOM.btnNeModalOk.addEventListener('click', hideNotEligibleModal);
+DOM.neModal.addEventListener('click', function(e) {
+  if (e.target === DOM.neModal) hideNotEligibleModal(); // click on backdrop closes it
+});
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape' && DOM.neModal.classList.contains('open')) hideNotEligibleModal();
+});
+
 // Re-verification required any time the Reference ID is edited
-DOM.formRefId.addEventListener('input', clearVerifiedCandidate);
-
-function verifyReferenceId() {
-  const refId = DOM.formRefId.value.trim();
-  setRefIdError('');
+DOM.formRefId.addEventListener('input', function() {
   clearVerifiedCandidate();
+  hideNotEligibleModal();
+});
 
-  if (!refId) {
-    setRefIdError('Please enter your Reference ID.');
-    return;
-  }
-
-  DOM.btnVerify.disabled = true;
-  DOM.btnVerify.textContent = 'Verifying…';
-
-  const callbackName = 'idsGvizCallback_' + Date.now();
+// Generic one-shot gviz/tq JSONP fetch. Calls onSuccess(rows) or
+// onFail(message). Handles its own timeout + <script> tag cleanup.
+function gvizFetch(sheetId, sheetTab, query, onSuccess, onFail) {
+  const callbackName = 'idsGvizCallback_' + Date.now() + '_' + Math.floor(Math.random() * 1e6);
   let settled = false;
 
   const cleanup = function() {
@@ -197,58 +234,29 @@ function verifyReferenceId() {
     const tag = document.getElementById(callbackName);
     if (tag) tag.remove();
     clearTimeout(timeoutRef);
-    DOM.btnVerify.disabled = false;
-    DOM.btnVerify.textContent = 'Verify';
   };
 
   const timeoutRef = setTimeout(function() {
     if (settled) return;
     settled = true;
     cleanup();
-    setRefIdError('Could not reach the verification service. Check your connection and try again.');
+    onFail('Could not reach the verification service. Check your connection and try again.');
   }, 12000);
 
   window[callbackName] = function(response) {
     if (settled) return;
     settled = true;
     cleanup();
-
     try {
-      const rows = response.table.rows;
-      if (!rows || rows.length === 0) {
-        setRefIdError('Reference ID not found. Please check and try again.');
-        return;
-      }
-
-      const cells = rows[0].c;
-      const name     = cells[1] && cells[1].v ? String(cells[1].v).trim() : '';
-      const mobile   = cells[2] && cells[2].v ? String(cells[2].v).trim() : '';
-      const email    = cells[3] && cells[3].v ? String(cells[3].v).trim() : '';
-      const position = cells[4] && cells[4].v ? String(cells[4].v).trim() : '';
-
-      if (!name) {
-        setRefIdError('Reference ID not found. Please check and try again.');
-        return;
-      }
-
-      state.candidate = { name, mobile, email, position, refId };
-
-      DOM.summaryName.textContent     = name;
-      DOM.summaryMobile.textContent   = mobile || '—';
-      DOM.summaryEmail.textContent    = email || '—';
-      DOM.summaryPosition.textContent = position || '—';
-      DOM.candSummary.style.display   = 'block';
-      DOM.formRefId.classList.add('success');
-      DOM.btnStart.disabled = false;
+      onSuccess(response.table.rows || []);
     } catch (err) {
-      setRefIdError('Something went wrong while verifying. Please try again.');
+      onFail('Something went wrong while verifying. Please try again.');
     }
   };
 
-  const query = "select B,C,D,E,F where B = '" + refId.replace(/'/g, "\\'") + "'";
   const url =
-    'https://docs.google.com/spreadsheets/d/' + GENERAL_SHEET_ID + '/gviz/tq' +
-    '?sheet=' + encodeURIComponent(GENERAL_SHEET_TAB) +
+    'https://docs.google.com/spreadsheets/d/' + sheetId + '/gviz/tq' +
+    '?sheet=' + encodeURIComponent(sheetTab) +
     '&tq=' + encodeURIComponent(query) +
     '&tqx=responseHandler:' + callbackName;
 
@@ -259,9 +267,117 @@ function verifyReferenceId() {
     if (settled) return;
     settled = true;
     cleanup();
-    setRefIdError('Could not verify right now. Please try again in a moment.');
+    onFail('Could not verify right now. Please try again in a moment.');
   };
   document.body.appendChild(script);
+}
+
+function verifyReferenceId() {
+  const refId = DOM.formRefId.value.trim();
+  setRefIdError('');
+  clearVerifiedCandidate();
+  console.log('[IDS-DEBUG] verifyReferenceId() called for refId:', refId);
+
+  if (!refId) {
+    setRefIdError('Please enter your Reference ID.');
+    return;
+  }
+
+  DOM.btnVerify.disabled = true;
+  DOM.btnVerify.textContent = 'Verifying…';
+
+  const finish = function(errMsg) {
+    DOM.btnVerify.disabled = false;
+    DOM.btnVerify.textContent = 'Verify';
+    if (errMsg) {
+      setRefIdError(errMsg);
+      showNotEligibleModal(errMsg);
+    }
+    console.log('[IDS-DEBUG] finish() called. errMsg =', errMsg || '(none — candidate allowed through)');
+  };
+
+  const safeRefId = refId.replace(/'/g, "\\'");
+
+  // ── Step 1: has this Reference ID already submitted a Technical
+  // Assessment attempt? ────────────────────────────────────────────
+  console.log('[IDS-DEBUG] Step 1: checking Technical Assessment tab for existing attempt...');
+  gvizFetch(
+    GENERAL_SHEET_ID,
+    TECHNICAL_SHEET_TAB,
+    "select B where B = '" + safeRefId + "'",
+    function(techRows) {
+      console.log('[IDS-DEBUG] Step 1 result — techRows.length =', techRows.length, techRows);
+      if (techRows.length > 0) {
+        finish(ALREADY_ATTEMPTED_MSG);
+        return;
+      }
+      runEligibilityCheck();
+    },
+    function(errMsg) { console.log('[IDS-DEBUG] Step 1 FAILED:', errMsg); finish(errMsg); }
+  );
+
+  // ── Step 2: is this Reference ID Borderline-and-above in the
+  // General Assessment? ────────────────────────────────────────────
+  function runEligibilityCheck() {
+    console.log('[IDS-DEBUG] Step 2: checking General Assessment recommendation...');
+    gvizFetch(
+      GENERAL_SHEET_ID,
+      GENERAL_SHEET_TAB,
+      "select B,C,D,E,F,K,M where B = '" + safeRefId + "'",
+      function(genRows) {
+        console.log('[IDS-DEBUG] Step 2 result — genRows.length =', genRows.length, JSON.stringify(genRows));
+        if (genRows.length === 0) {
+          finish(NOT_ELIGIBLE_MSG);
+          return;
+        }
+
+        const cells = genRows[0].c;
+        const name           = cells[1] && cells[1].v ? String(cells[1].v).trim() : '';
+        const mobile         = cells[2] && cells[2].v ? String(cells[2].v).trim() : '';
+        const email          = cells[3] && cells[3].v ? String(cells[3].v).trim() : '';
+        const position       = cells[4] && cells[4].v ? String(cells[4].v).trim() : '';
+        const recommendation = cells[5] && cells[5].v ? String(cells[5].v).trim() : '';
+        const track           = cells[6] && cells[6].v ? String(cells[6].v).trim() : '';
+        console.log('[IDS-DEBUG] Parsed — name:', JSON.stringify(name), '| recommendation:', JSON.stringify(recommendation), '| track:', JSON.stringify(track));
+
+        if (!name) {
+          finish(NOT_ELIGIBLE_MSG);
+          return;
+        }
+
+        // Only Borderline-and-above candidates from the General Assessment
+        // are allowed to proceed. Reject / unrecognised ratings get the
+        // same generic message as an unmatched Reference ID.
+        const isEligible = ELIGIBLE_RATINGS.indexOf(recommendation.toLowerCase()) !== -1;
+        console.log('[IDS-DEBUG] ELIGIBLE_RATINGS check — recommendation.toLowerCase():', JSON.stringify(recommendation.toLowerCase()), '| isEligible:', isEligible);
+        if (!isEligible) {
+          finish(NOT_ELIGIBLE_MSG);
+          return;
+        }
+
+        // Block cross-track attempts: an Experienced candidate trying the
+        // Freshers Technical Assessment (or vice versa) to game an easier
+        // paper. The candidate's own registered track must match this portal.
+        if (track.toLowerCase() !== PORTAL_TRACK.toLowerCase()) {
+          console.log('[IDS-DEBUG] Track mismatch — candidate track:', JSON.stringify(track), '| portal track:', PORTAL_TRACK);
+          finish(NOT_ELIGIBLE_MSG);
+          return;
+        }
+
+        state.candidate = { name, mobile, email, position, refId };
+
+        DOM.summaryName.textContent     = name;
+        DOM.summaryMobile.textContent   = mobile || '—';
+        DOM.summaryEmail.textContent    = email || '—';
+        DOM.summaryPosition.textContent = position || '—';
+        DOM.candSummary.style.display   = 'block';
+        DOM.formRefId.classList.add('success');
+        DOM.btnStart.disabled = false;
+        finish(null);
+      },
+      function(errMsg) { console.log('[IDS-DEBUG] Step 2 FAILED:', errMsg); finish(errMsg); }
+    );
+  }
 }
 
 DOM.btnVerify.addEventListener('click', verifyReferenceId);
