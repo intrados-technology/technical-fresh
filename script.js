@@ -6,7 +6,7 @@
 'use strict';
 
 // ── Google Sheets integration endpoint (replace with your URL) ──
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxwwskAPDFEYWuNENc9DplBoF-b30Q2c7xqUVfyhnPvJEKosYbasi8PwdhgvL5kxPjXnw/exec";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxteJu1b_okEFYv4jbSF4Ne55bOfBsyIiIx3tnAVHq833I1f7c7aGcn7VVck--VI_a8tg/exec";
 const ASSESSMENT_TYPE =
   document.querySelector('meta[name="assessment-type"]')?.content || 'Technical';
 
@@ -23,7 +23,7 @@ const ASSESSMENT_TYPE =
 // candidate so no scoring detail is ever revealed to them.
 const GENERAL_SHEET_ID  = "1Ep0ESBJb-QxzBfN2oxIAH0RFJOPvCsNb4NpvmyWOfDA";
 const GENERAL_SHEET_TAB = "General Assessment";
-const TECHNICAL_SHEET_TAB = "Technical Assessment"; // same spreadsheet, different tab — used to block repeat attempts
+const TECHNICAL_SHEET_TAB = "Professional Assessment"; // same spreadsheet, different tab — used to block repeat attempts; shared with the Non-Technical (HR) assessment
 // "Rejection Overridden" is a manual status the backend/HR team can set
 // directly in the General Assessment sheet (column K) to let a
 // previously-Rejected candidate appear for the Technical Assessment anyway.
@@ -35,6 +35,7 @@ const NOT_ELIGIBLE_MSG  = "You are not eligible for this test.";
 // Experienced candidate from taking the (typically easier) Freshers
 // Technical Assessment to game their score, and vice versa.
 const PORTAL_TRACK      = "Fresher";
+const PORTAL_DOMAIN     = "Technical"; // both Technical portals (Experience & Freshers) share this domain value
 
 // ── Multi-Tab Protection ────────────────────────────────────────
 // Each tab gets a unique ID. When an assessment starts, that ID is
@@ -276,7 +277,6 @@ function verifyReferenceId() {
   const refId = DOM.formRefId.value.trim();
   setRefIdError('');
   clearVerifiedCandidate();
-  console.log('[IDS-DEBUG] verifyReferenceId() called for refId:', refId);
 
   if (!refId) {
     setRefIdError('Please enter your Reference ID.');
@@ -293,39 +293,33 @@ function verifyReferenceId() {
       setRefIdError(errMsg);
       showNotEligibleModal(errMsg);
     }
-    console.log('[IDS-DEBUG] finish() called. errMsg =', errMsg || '(none — candidate allowed through)');
   };
 
   const safeRefId = refId.replace(/'/g, "\\'");
 
   // ── Step 1: has this Reference ID already submitted a Technical
   // Assessment attempt? ────────────────────────────────────────────
-  console.log('[IDS-DEBUG] Step 1: checking Technical Assessment tab for existing attempt...');
   gvizFetch(
     GENERAL_SHEET_ID,
     TECHNICAL_SHEET_TAB,
     "select B where B = '" + safeRefId + "'",
     function(techRows) {
-      console.log('[IDS-DEBUG] Step 1 result — techRows.length =', techRows.length, techRows);
       if (techRows.length > 0) {
         finish(ALREADY_ATTEMPTED_MSG);
         return;
       }
       runEligibilityCheck();
     },
-    function(errMsg) { console.log('[IDS-DEBUG] Step 1 FAILED:', errMsg); finish(errMsg); }
   );
 
   // ── Step 2: is this Reference ID Borderline-and-above in the
   // General Assessment? ────────────────────────────────────────────
   function runEligibilityCheck() {
-    console.log('[IDS-DEBUG] Step 2: checking General Assessment recommendation...');
     gvizFetch(
       GENERAL_SHEET_ID,
       GENERAL_SHEET_TAB,
-      "select B,C,D,E,F,K,M where B = '" + safeRefId + "'",
+      "select B,C,D,E,F,K,M,O where B = '" + safeRefId + "'",
       function(genRows) {
-        console.log('[IDS-DEBUG] Step 2 result — genRows.length =', genRows.length, JSON.stringify(genRows));
         if (genRows.length === 0) {
           finish(NOT_ELIGIBLE_MSG);
           return;
@@ -338,7 +332,7 @@ function verifyReferenceId() {
         const position       = cells[4] && cells[4].v ? String(cells[4].v).trim() : '';
         const recommendation = cells[5] && cells[5].v ? String(cells[5].v).trim() : '';
         const track           = cells[6] && cells[6].v ? String(cells[6].v).trim() : '';
-        console.log('[IDS-DEBUG] Parsed — name:', JSON.stringify(name), '| recommendation:', JSON.stringify(recommendation), '| track:', JSON.stringify(track));
+        const domain          = cells[7] && cells[7].v ? String(cells[7].v).trim() : '';
 
         if (!name) {
           finish(NOT_ELIGIBLE_MSG);
@@ -349,8 +343,15 @@ function verifyReferenceId() {
         // are allowed to proceed. Reject / unrecognised ratings get the
         // same generic message as an unmatched Reference ID.
         const isEligible = ELIGIBLE_RATINGS.indexOf(recommendation.toLowerCase()) !== -1;
-        console.log('[IDS-DEBUG] ELIGIBLE_RATINGS check — recommendation.toLowerCase():', JSON.stringify(recommendation.toLowerCase()), '| isEligible:', isEligible);
         if (!isEligible) {
+          finish(NOT_ELIGIBLE_MSG);
+          return;
+        }
+
+        // Block Non-Technical candidates from taking the Technical
+        // Assessment (and vice versa) — a candidate's registered Domain
+        // must be "Technical" to proceed here.
+        if (domain.toLowerCase() !== 'technical') {
           finish(NOT_ELIGIBLE_MSG);
           return;
         }
@@ -359,7 +360,6 @@ function verifyReferenceId() {
         // Freshers Technical Assessment (or vice versa) to game an easier
         // paper. The candidate's own registered track must match this portal.
         if (track.toLowerCase() !== PORTAL_TRACK.toLowerCase()) {
-          console.log('[IDS-DEBUG] Track mismatch — candidate track:', JSON.stringify(track), '| portal track:', PORTAL_TRACK);
           finish(NOT_ELIGIBLE_MSG);
           return;
         }
@@ -375,7 +375,6 @@ function verifyReferenceId() {
         DOM.btnStart.disabled = false;
         finish(null);
       },
-      function(errMsg) { console.log('[IDS-DEBUG] Step 2 FAILED:', errMsg); finish(errMsg); }
     );
   }
 }
@@ -588,7 +587,9 @@ function finaliseSubmission() {
     email:          state.candidate.email,
     position:       state.candidate.position,
     candidateRefId: state.candidate.refId,
+    domain:         PORTAL_DOMAIN,
     totalScore:     scores.totalScore,
+    maxScore:       30,
     rating:         scores.rating,
     submissionTime: subTime,
     answers:        state.answers
@@ -615,14 +616,15 @@ async function submitToGoogleSheet(record) {
       method: 'POST', mode: 'no-cors',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        sheetName:      'Technical Assessment',
+        sheetName:      'Professional Assessment',
         referenceId:    record.referenceId,
         name:           record.name,
         mobile:         record.mobile,
         email:          record.email,
         position:       record.position,
-        candidateRefId: record.candidateRefId,
+        domain:         record.domain,
         totalScore:     record.totalScore,
+        maxScore:       record.maxScore,
         rating:         record.rating,
         submissionTime: record.submissionTime
       })
