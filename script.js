@@ -132,7 +132,6 @@ const DOM = {
   progressCount:  document.getElementById('progress-count'),
   sectionStrip:   document.getElementById('section-strip'),
   questionWrap:   document.getElementById('question-wrap'),
-  btnPrev:        document.getElementById('btn-prev'),
   btnNext:        document.getElementById('btn-next'),
   btnSubmit:      document.getElementById('btn-submit'),
   unansweredHint: document.getElementById('unanswered-hint'),
@@ -723,7 +722,6 @@ function renderQuestion(index) {
   });
 
   // Nav button states
-  DOM.btnPrev.disabled            = (index === 0);
   const isLast                    = (index === SHUFFLED_QUESTIONS.length - 1);
   DOM.btnNext.style.display       = isLast ? 'none'        : 'inline-flex';
   DOM.btnSubmit.style.display     = isLast ? 'inline-flex' : 'none';
@@ -737,10 +735,6 @@ function escapeHTML(str) {
 }
 
 // ── Navigation ───────────────────────────────────────────────────
-DOM.btnPrev.addEventListener('click', function() {
-  if (state.currentQ > 0) renderQuestion(state.currentQ - 1);
-});
-
 DOM.btnNext.addEventListener('click', function() {
   if (state.currentQ < SHUFFLED_QUESTIONS.length - 1) renderQuestion(state.currentQ + 1);
 });
