@@ -188,6 +188,28 @@ window.addEventListener('beforeunload', function(e) {
   }
 });
 
+// ── Candidate Identity Bar ────────────────────────────────────────
+// Populated from ?ref=&name= query params, passed along by
+// Assessment-list when it sends the candidate here. Purely cosmetic —
+// does not affect the verification flow below, which still requires
+// the candidate to click Verify (though the field is pre-filled for
+// convenience if the param is present).
+(function initCandidateBar() {
+  const params = new URLSearchParams(window.location.search);
+  const urlRefId = (params.get('ref')  || '').trim();
+  const urlName  = (params.get('name') || '').trim();
+
+  if (urlRefId && urlName) {
+    document.getElementById('candidate-bar-name').textContent = urlName;
+    document.getElementById('candidate-bar-ref').textContent  = urlRefId;
+    document.getElementById('candidate-bar').style.display = 'block';
+  }
+
+  if (urlRefId && DOM.formRefId) {
+    DOM.formRefId.value = urlRefId;
+  }
+})();
+
 // ── Reference ID Verification & Auto-Fill ─────────────────────────
 // Candidate types their Reference ID from the General Assessment,
 // clicks Verify, and two checks run in sequence before they're
@@ -535,12 +557,15 @@ function showWebcamConsent() {
 }
 
 async function startWebcamRecording() {
+  console.log('[IDS-WEBCAM-DEBUG] startWebcamRecording() called');
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({
       video: { width: 320, height: 240 },
       audio: false
     });
+    console.log('[IDS-WEBCAM-DEBUG] getUserMedia succeeded, stream tracks:', mediaStream.getTracks().length);
   } catch (err) {
+    console.log('[IDS-WEBCAM-DEBUG] getUserMedia FAILED:', err.name, err.message);
     return false;
   }
   try {
@@ -548,34 +573,53 @@ async function startWebcamRecording() {
       mimeType: 'video/webm;codecs=vp8',
       videoBitsPerSecond: 150000
     });
+    console.log('[IDS-WEBCAM-DEBUG] MediaRecorder created with vp8, state:', mediaRecorder.state);
   } catch (err) {
-    try { mediaRecorder = new MediaRecorder(mediaStream); }
-    catch (err2) { return false; }
+    console.log('[IDS-WEBCAM-DEBUG] vp8 MediaRecorder failed, trying fallback:', err.message);
+    try {
+      mediaRecorder = new MediaRecorder(mediaStream);
+      console.log('[IDS-WEBCAM-DEBUG] fallback MediaRecorder created, state:', mediaRecorder.state);
+    }
+    catch (err2) {
+      console.log('[IDS-WEBCAM-DEBUG] fallback MediaRecorder ALSO FAILED:', err2.message);
+      return false;
+    }
   }
   webcamChunkIndex = 0;
   mediaRecorder.ondataavailable = function(e) {
+    console.log('[IDS-WEBCAM-DEBUG] ondataavailable fired, blob size:', e.data ? e.data.size : 'no data');
     if (e.data && e.data.size > 0) {
       uploadWebcamChunk(e.data, webcamChunkIndex);
       webcamChunkIndex++;
     }
   };
-  try { mediaRecorder.start(30000); } catch(e) { return false; } // emit a chunk every 30s
+  try {
+    mediaRecorder.start(30000);
+    console.log('[IDS-WEBCAM-DEBUG] mediaRecorder.start(30000) called successfully, state:', mediaRecorder.state);
+  } catch(e) {
+    console.log('[IDS-WEBCAM-DEBUG] mediaRecorder.start() FAILED:', e.message);
+    return false;
+  }
   return true;
 }
 
 function stopWebcamRecording() {
+  console.log('[IDS-WEBCAM-DEBUG] stopWebcamRecording() called, recorder state:', mediaRecorder ? mediaRecorder.state : 'no recorder');
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-    try { mediaRecorder.stop(); } catch(e) {}
+    try { mediaRecorder.stop(); console.log('[IDS-WEBCAM-DEBUG] mediaRecorder.stop() called'); } catch(e) { console.log('[IDS-WEBCAM-DEBUG] stop() error:', e.message); }
   }
   if (mediaStream) {
     mediaStream.getTracks().forEach(function(t) { t.stop(); });
+    console.log('[IDS-WEBCAM-DEBUG] media tracks stopped');
   }
 }
 
 function uploadWebcamChunk(blob, index) {
+  console.log('[IDS-WEBCAM-DEBUG] uploadWebcamChunk() called for chunk', index, 'size:', blob.size);
   var reader = new FileReader();
   reader.onloadend = function() {
     var base64 = reader.result.split(',')[1];
+    console.log('[IDS-WEBCAM-DEBUG] base64 encoded, length:', base64.length, '— sending fetch now');
     fetch(SCRIPT_URL, {
       method: 'POST', mode: 'no-cors',
       headers: { 'Content-Type': 'application/json' },
@@ -587,7 +631,12 @@ function uploadWebcamChunk(blob, index) {
         mimeType:    blob.type,
         data:        base64
       })
-    }).catch(function(err) { console.warn('[IDS] Webcam chunk upload error:', err); });
+    }).then(function() {
+      console.log('[IDS-WEBCAM-DEBUG] fetch() completed (no-cors — response is always opaque, this only confirms no network-level throw)');
+    }).catch(function(err) { console.log('[IDS-WEBCAM-DEBUG] fetch() THREW:', err.message); });
+  };
+  reader.onerror = function(err) {
+    console.log('[IDS-WEBCAM-DEBUG] FileReader error:', err);
   };
   reader.readAsDataURL(blob);
 }
