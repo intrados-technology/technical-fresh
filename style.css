@@ -274,6 +274,7 @@ h1,h2,h3 { font-family: 'Playfair Display', serif; letter-spacing: -0.02em; }
 
 .form-input.error   { border-color: var(--danger); box-shadow: 0 0 0 3px rgba(220,38,38,0.08); }
 .form-input.success { border-color: var(--success); }
+.form-input[readonly] { background: var(--surface-3); cursor: not-allowed; }
 
 .field-error {
   font-size: 12px;

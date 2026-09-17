@@ -193,7 +193,14 @@ window.addEventListener('beforeunload', function(e) {
 // know their Reference ID at this point (they already verified once
 // on Assessment-list), we auto-run the verification immediately
 // instead of making them click Verify again — same eligibility
-// checks still run underneath, just triggered automatically.
+// checks still run underneath, just triggered automatically. The
+// field is frozen (read-only) and the Verify button hidden while in
+// this auto-verified state, so the candidate can review their
+// details but not accidentally swap in a different Reference ID.
+// If auto-verification ever fails, we unfreeze everything so there's
+// still a manual fallback rather than trapping the candidate.
+let autoVerifyFrozen = false;
+
 (function initCandidateCorner() {
   const params = new URLSearchParams(window.location.search);
   const urlRefId = (params.get('ref')  || '').trim();
@@ -207,6 +214,9 @@ window.addEventListener('beforeunload', function(e) {
 
   if (urlRefId && DOM.formRefId) {
     DOM.formRefId.value = urlRefId;
+    DOM.formRefId.readOnly = true;
+    DOM.btnVerify.style.display = 'none';
+    autoVerifyFrozen = true;
     window.addEventListener('DOMContentLoaded', function() {
       verifyReferenceId();
     });
@@ -335,6 +345,11 @@ function verifyReferenceId() {
     if (errMsg) {
       setRefIdError(errMsg);
       showNotEligibleModal(errMsg);
+      if (autoVerifyFrozen) {
+        DOM.formRefId.readOnly = false;
+        DOM.btnVerify.style.display = '';
+        autoVerifyFrozen = false;
+      }
     }
   };
 
